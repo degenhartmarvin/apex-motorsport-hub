@@ -59,7 +59,43 @@ async function fetchFeed(series,q){
     return [];
   }
 }
-async function refresh(){let status=$("#status");status.textContent="Suche Nachrichten der letzten 7 Tage …"; let results=await Promise.all(Object.entries(QUERIES).map(([s,q])=>fetchFeed(s,q)));news=results.flat();let seen=new Set();news=news.filter(n=>!seen.has(n.url)&&seen.add(n.url));news.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));if(news.length){write("cache",news);status.textContent=`${news.length} Meldungen geladen · ${new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})} Uhr`}else{news=read("cache");status.textContent=news.length?"":Aktualisierung fehlgeschlagen – gespeicherter Stand wird angezeigt. Bitte später erneut versuchen."Keine News erreichbar. Prüfe Internetverbindung oder RSS-Proxy."}render()}
+async function refresh(){
+  let status = $("#status");
+  status.textContent = "Suche Nachrichten …";
+
+  try {
+    let results = await Promise.all(
+      Object.entries(QUERIES).map(([s,q]) => fetchFeed(s,q))
+    );
+
+    news = results.flat();
+
+    let seen = new Set();
+    news = news.filter(n =>
+      !seen.has(n.url) && seen.add(n.url)
+    );
+
+    news.sort((a,b) =>
+      new Date(b.published || 0) - new Date(a.published || 0)
+    );
+
+    if(news.length){
+      write("cache",news);
+      status.textContent = news.length + " Meldungen geladen.";
+    } else {
+      news = read("cache");
+      status.textContent = news.length
+        ? "Keine neuen Nachrichten. Gespeicherter Stand wird angezeigt."
+        : "Keine Nachrichten erreichbar. Bitte später erneut versuchen.";
+    }
+  } catch(e) {
+    console.error("APEX Fehler:",e);
+    news = read("cache");
+    status.textContent = "Fehler beim Laden. Gespeicherter Stand wird angezeigt.";
+  }
+
+  render();
+}
 function render(){let root=$("#content"),items=[];
 if(page==="home"){items=news.slice(0,18);root.innerHTML=`<div class=head><h2>Die neuesten Meldungen</h2><span class=muted>${news.length} Beiträge</span></div><div class=series>${SERIES.map(s=>`<button data-series="${esc(s)}">${esc(s)}<span>NEWS ANSEHEN ↗</span></button>`).join("")}</div><div class=head><h2>Aus dem Fahrerlager</h2></div><div class=grid>${items.map(card).join("")||'<div class=empty>Noch keine News geladen.</div>'}</div>`;$$("[data-series]").forEach(b=>b.onclick=()=>{filter=b.dataset.series;page="news";setNav();render()})}
 else if(page==="news"){items=news.filter(n=>!filter||n.series===filter);root.innerHTML=`<div class=head><h2>News</h2><span class=muted>${items.length} Beiträge</span></div>${filters()}<div class=grid>${items.map(card).join("")||'<div class=empty>Keine passenden News. Aktualisieren oder Filter ändern.</div>'}</div>`;bindFilter()}
