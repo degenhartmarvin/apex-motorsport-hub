@@ -1,95 +1,34 @@
 const SERIES=["WEC","IMSA","DTM","GT World Challenge Europe","24h Nürburgring","NLS","IndyCar","NASCAR","Formel 1","MotoGP"];
-const QUERIES={"WEC":"FIA WEC endurance racing","IMSA":"IMSA SportsCar Championship","DTM":"DTM motorsport","GT World Challenge Europe":"GT World Challenge Europe","24h Nürburgring":"24h Nürburgring","NLS":"Nürburgring Langstrecken-Serie NLS","IndyCar":"IndyCar Series","NASCAR":"NASCAR","Formel 1":"Formula 1 F1","MotoGP":"MotoGP"};
-const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)], esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let page="home",filter="",statusFilter="Bestätigt",news=[],installPrompt=null;
-const read=k=>JSON.parse(localStorage.getItem("apex_"+k)||"[]"),write=(k,v)=>localStorage.setItem("apex_"+k,JSON.stringify(v));
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let page="home",filter="",statusFilter="Bestätigt",news=[],standings=[],installPrompt=null,refreshing=false;
+const read=k=>{try{return JSON.parse(localStorage.getItem("apex_"+k)||"[]")}catch{return[]}},write=(k,v)=>localStorage.setItem("apex_"+k,JSON.stringify(v));
+const API_URL="https://apex-motorsport-api.degenhartmarvin.workers.dev/api/news";
+const OFFICIAL_STANDINGS={
+ "WEC":"https://www.fiawec.com/en/season/2026",
+ "IMSA":"https://www.imsa.com/weathertech/standings/",
+ "DTM":"https://www.dtm.com/data/standings?season=2026",
+ "GT World Challenge Europe":"https://www.gt-world-challenge-europe.com/standings",
+ "24h Nürburgring":"https://www.24h-rennen.de/",
+ "NLS":"https://www.nuerburgring-langstrecken-serie.de/",
+ "IndyCar":"https://www.indycar.com/standings",
+ "NASCAR":"https://www.nascar.com/standings/",
+ "Formel 1":"https://www.formula1.com/en/results/2026/drivers",
+ "MotoGP":"https://www.motogp.com/en/world-standing"
+};
 function updateCount(){$("#count").textContent=read("saved").length}
 function save(n){let a=read("saved");a=a.some(x=>x.url===n.url)?a.filter(x=>x.url!==n.url):[n,...a];write("saved",a);updateCount();render()}
-function card(n){let yes=read("saved").some(x=>x.url===n.url);return `<article class="card"><span class="tag">${esc(n.series||"Motorsport")} · ${esc(n.source||n.status||"APEX")}</span><h3>${esc(n.title||n.driver||"Eintrag")}</h3>${n.summary?`<p>${esc(n.summary.replace(/<[^>]*>/g,"").slice(0,220))}</p>`:""}${n.detail?`<p>${esc(n.detail)}</p>`:""}<div class="actions">${n.url?`<a href="${esc(n.url)}" target="_blank" rel="noopener">Meldung öffnen ↗</a>`:"<span class=muted>Lokaler Eintrag</span>"}<button class="save ${yes?"saved":""}" data-save="${esc(n.url||"")}" data-localid="${esc(n.localid||"")}">${yes?"✓ Gespeichert":"＋ Merken"}</button></div></article>`}
-function bindSave(){ $$("[data-save]").forEach(b=>b.onclick=()=>{let n=news.find(x=>x.url===b.dataset.save)||read("saved").find(x=>x.url===b.dataset.save);if(n)save(n);else if(b.dataset.localid){let k=page==="silly"?"silly":"standings",a=read(k).filter(x=>x.localid!==b.dataset.localid);write(k,a);render()}})}
-function filters(){return `<div class="filters"><select id="series"><option value="">Alle Rennserien</option>${SERIES.map(s=>`<option ${filter===s?"selected":""}>${esc(s)}</option>`).join("")}</select></div>`}
+function card(n){let yes=read("saved").some(x=>x.url===n.url);let date=n.published?new Date(n.published).toLocaleDateString("de-DE"):"";return `<article class="card"><span class="tag">${esc(n.series||"Motorsport")} · ${esc(n.source||"APEX")}${date?" · "+esc(date):""}</span><h3>${esc(n.title||n.driver||"Eintrag")}</h3>${n.summary?`<p>${esc(String(n.summary).replace(/<[^>]*>/g,"").slice(0,220))}</p>`:""}${n.detail?`<p>${esc(n.detail)}</p>`:""}<div class="actions">${n.url?`<a href="${esc(n.url)}" target="_blank" rel="noopener">Meldung öffnen ↗</a>`:"<span class=muted>Lokaler Eintrag</span>"}<button class="save ${yes?"saved":""}" data-save="${esc(n.url||"")}" data-localid="${esc(n.localid||"")}">${yes?"✓ Gespeichert":"＋ Merken"}</button></div></article>`}
+function bindSave(){$$("[data-save]").forEach(b=>b.onclick=()=>{let n=news.find(x=>x.url===b.dataset.save)||read("saved").find(x=>x.url===b.dataset.save);if(n)save(n);else if(b.dataset.localid){let k=page==="silly"?"silly":"standings",a=read(k).filter(x=>x.localid!==b.dataset.localid);write(k,a);render()}})}
+function filters(){return `<div class="filters"><select id="series"><option value="">Alle Rennserien</option>${SERIES.map(s=>`<option value="${esc(s)}" ${filter===s?"selected":""}>${esc(s)}</option>`).join("")}</select></div>`}
 function bindFilter(){let s=$("#series");if(s)s.onchange=()=>{filter=s.value;render()}}
-
-const API_URL = "https://apex-motorsport-api.degenhartmarvin.workers.dev/api/news";
-
-async function refresh(){
-  const status = $("#status");
-  status.textContent = "Lade Nachrichten von APEX …";
-
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
-
-    const response = await fetch(API_URL, {
-      method: "GET",
-      cache: "no-store",
-      signal: controller.signal
-    });
-
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      throw new Error("HTTP " + response.status);
-    }
-
-    const data = await response.json();
-
-    if (!Array.isArray(data.news)) {
-      throw new Error("Ungültiges Nachrichtenformat");
-    }
-
-    news = data.news.map(item => ({
-      title: item.title || "",
-      url: item.url || "",
-      summary: item.summary || "",
-      source: item.source || "APEX",
-      published: item.published || "",
-      timestamp: item.timestamp || 0,
-      series: Array.isArray(item.series)
-        ? (item.series[0] || "Motorsport")
-        : (item.series || "Motorsport"),
-      sillySeason: item.sillySeason || false,
-      status: item.status || "Prüfung erforderlich"
-    })).filter(item => item.title && item.url);
-
-    const seen = new Set();
-    news = news.filter(item =>
-      !seen.has(item.url) && seen.add(item.url)
-    );
-
-    news.sort((a, b) =>
-      (b.timestamp || 0) - (a.timestamp || 0)
-    );
-
-    write("cache", news);
-
-    status.textContent =
-      news.length + " Nachrichten geladen · " +
-      (data.successfulSources || 0) + " Quellen aktiv";
-
-  } catch(error) {
-    console.error("APEX Ladefehler:", error);
-
-    news = read("cache");
-
-    status.textContent = news.length
-      ? "Verbindung fehlgeschlagen – gespeicherte Nachrichten werden angezeigt."
-      : "Nachrichten konnten nicht geladen werden.";
-  }
-
-  render();
-}
-
-function render(){let root=$("#content"),items=[];
-if(page==="home"){items=news.slice(0,18);root.innerHTML=`<div class=head><h2>Die neuesten Meldungen</h2><span class=muted>${news.length} Beiträge</span></div><div class=series>${SERIES.map(s=>`<button data-series="${esc(s)}">${esc(s)}<span>NEWS ANSEHEN ↗</span></button>`).join("")}</div><div class=head><h2>Aus dem Fahrerlager</h2></div><div class=grid>${items.map(card).join("")||'<div class=empty>Noch keine News geladen.</div>'}</div>`;$$("[data-series]").forEach(b=>b.onclick=()=>{filter=b.dataset.series;page="news";setNav();render()})}
-else if(page==="news"){items=news.filter(n=>!filter||n.series===filter);root.innerHTML=`<div class=head><h2>News</h2><span class=muted>${items.length} Beiträge</span></div>${filters()}<div class=grid>${items.map(card).join("")||'<div class=empty>Keine passenden News. Aktualisieren oder Filter ändern.</div>'}</div>`;bindFilter()}
-else if(page==="saved"){items=read("saved");root.innerHTML=`<div class=head><h2>Gespeicherte News</h2><span class=muted>${items.length} Lesezeichen</span></div><div class=grid>${items.map(card).join("")||'<div class=empty>Tippe bei einer News auf „＋ Merken“.</div>'}</div>`}
-else if(page==="silly"){items=read("silly").filter(n=>(!filter||n.series===filter)&&n.status===statusFilter);root.innerHTML=`<div class=head><h2>Silly Season</h2><span class=muted>Manuell gepflegt</span></div>${filters()}<div class=pills><button class="pill ${statusFilter==="Bestätigt"?"active":""}" data-status="Bestätigt">✓ Bestätigt</button><button class="pill ${statusFilter==="Gerücht"?"active":""}" data-status="Gerücht">◌ Gerücht</button></div><form id=addSilly class=form><strong>Eintrag hinzufügen</strong><input name=driver placeholder="Fahrer / Person" required><input name=from placeholder="Bisheriges Team (optional)"><input name=to placeholder="Neues Team (optional)"><select name=series>${SERIES.map(s=>`<option>${esc(s)}</option>`).join("")}</select><select name=status><option>Bestätigt</option><option>Gerücht</option></select><input name=url type=url placeholder="Quellenlink (optional)"><textarea name=detail placeholder="Notiz / Quelle / Kontext"></textarea><button class=primary>Eintrag speichern</button></form><div class=grid>${items.map(n=>card({...n,title:n.driver,summary:[n.from_team,n.to_team].filter(Boolean).join(" → "),url:n.source_url||"",localid:n.localid})).join("")||'<div class=empty>Keine Einträge in dieser Kategorie. Füge oben einen Eintrag hinzu. Gerüchte bitte als solche kennzeichnen und mit Quelle prüfen.</div>'}</div>`;bindFilter();$$("[data-status]").forEach(b=>b.onclick=()=>{statusFilter=b.dataset.status;render()});$("#addSilly").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target),a=read("silly");a.unshift({localid:crypto.randomUUID(),driver:f.get("driver"),from_team:f.get("from"),to_team:f.get("to"),series:f.get("series"),status:f.get("status"),source_url:f.get("url"),detail:f.get("detail"),title:f.get("driver")});write("silly",a);render()}}
-else if(page==="standings"){items=read("standings").filter(n=>!filter||n.series===filter);root.innerHTML=`<div class=head><h2>Meisterschaftsstände</h2></div>${filters()}<p class=muted>Manuelle lokale Tabelle. Automatische, verifizierte Punktestände sind in der serverlosen Version nicht angebunden.</p><form id=addStanding class=form><strong>Tabellenzeile hinzufügen</strong><select name=series>${SERIES.map(s=>`<option>${esc(s)}</option>`).join("")}</select><input name=season placeholder="Saison, z. B. 2026" required><input name=position type=number min=1 placeholder="Position" required><input name=competitor placeholder="Fahrer / Team" required><input name=points placeholder="Punkte" required><button class=primary>Zeile speichern</button></form><div class=scroll>${items.length?`<table class=table><thead><tr><th>Serie</th><th>Pos.</th><th>Fahrer / Team</th><th>Punkte</th><th>Saison</th></tr></thead><tbody>${items.map(n=>`<tr><td>${esc(n.series)}</td><td>${esc(n.position)}</td><td>${esc(n.competitor)}</td><td>${esc(n.points)}</td><td>${esc(n.season)}</td></tr>`).join("")}</tbody></table>`:'<div class=empty>Noch keine Tabellenzeilen. Du kannst sie oben manuell hinzufügen.</div>'}</div>`;bindFilter();$("#addStanding").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target),a=read("standings");a.push({localid:crypto.randomUUID(),series:f.get("series"),season:f.get("season"),position:f.get("position"),competitor:f.get("competitor"),points:f.get("points")});write("standings",a);render()}}
-$$(".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===page));bindSave();updateCount()}
+function normalizeNews(items){return items.map(item=>({...item,title:item.title||"",url:item.url||"",summary:item.summary||"",source:item.source||"APEX",published:item.published||"",timestamp:Number(item.timestamp)||0,series:Array.isArray(item.series)?(item.series[0]||"Motorsport"):(item.series||"Motorsport"),sillySeason:Boolean(item.sillySeason),status:item.status||"Gerücht"})).filter(x=>x.title&&x.url)}
+async function refresh(){if(refreshing)return;refreshing=true;const status=$("#status");if(status)status.textContent="Lade APEX-Daten …";try{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);let response;try{response=await fetch(API_URL+"?refresh=1",{cache:"no-store",signal:controller.signal})}finally{clearTimeout(timer)}if(!response.ok)throw new Error("HTTP "+response.status);const data=await response.json();if(!Array.isArray(data.news))throw new Error("Ungültiges Nachrichtenformat");news=normalizeNews(data.news);news.sort((a,b)=>b.timestamp-a.timestamp);write("cache",news);if(Array.isArray(data.standings))standings=data.standings;else if(data.standings&&typeof data.standings==="object")standings=Object.values(data.standings);else standings=[];write("standings_cache",standings);let stamp=data.updatedAt?new Date(data.updatedAt).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}):"";status.textContent=news.length+" Nachrichten · "+(data.successfulSources??0)+" Quellen aktiv"+(stamp?" · Stand "+stamp:"");}catch(error){console.error("APEX Ladefehler:",error);news=read("cache");standings=read("standings_cache");if(status)status.textContent=news.length?"Verbindung fehlgeschlagen – gespeicherte Nachrichten werden angezeigt.":"Nachrichten konnten nicht geladen werden."}finally{refreshing=false;render()}}
+function renderSilly(root){const automatic=news.filter(n=>n.sillySeason).map(n=>({...n,status:["Bestätigt","Gerücht"].includes(n.status)?n.status:"Gerücht"}));const manual=read("silly");const all=[...manual,...automatic];const items=all.filter(n=>(!filter||n.series===filter)&&n.status===statusFilter);root.innerHTML=`<div class=head><h2>Silly Season</h2><span class=muted>${automatic.length} automatisch erkannt · ${manual.length} eigene</span></div>${filters()}<div class=pills><button class="pill ${statusFilter==="Bestätigt"?"active":""}" data-status="Bestätigt">✓ Bestätigt</button><button class="pill ${statusFilter==="Gerücht"?"active":""}" data-status="Gerücht">◌ Gerücht</button></div><p class=muted>Automatisch erkannte Meldungen werden vorsichtig als Gerücht geführt, solange keine eindeutige offizielle Bestätigung vorliegt.</p><form id=addSilly class=form><strong>Eintrag selbst hinzufügen</strong><input name=driver placeholder="Fahrer / Person" required><input name=from placeholder="Bisheriges Team (optional)"><input name=to placeholder="Neues Team (optional)"><select name=series>${SERIES.map(s=>`<option>${esc(s)}</option>`).join("")}</select><select name=status><option>Bestätigt</option><option>Gerücht</option></select><input name=url type=url placeholder="Quellenlink (optional)"><textarea name=detail placeholder="Notiz / Quelle / Kontext"></textarea><button class=primary>Eintrag speichern</button></form><div class=grid>${items.map(n=>n.driver?card({...n,title:n.driver,summary:[n.from_team,n.to_team].filter(Boolean).join(" → "),url:n.source_url||"",localid:n.localid}):card(n)).join("")||'<div class=empty>Keine Meldungen in dieser Kategorie gefunden.</div>'}</div>`;bindFilter();$$("[data-status]").forEach(b=>b.onclick=()=>{statusFilter=b.dataset.status;render()});$("#addSilly").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target),a=read("silly");a.unshift({localid:crypto.randomUUID(),driver:f.get("driver"),from_team:f.get("from"),to_team:f.get("to"),series:f.get("series"),status:f.get("status"),source_url:f.get("url"),detail:f.get("detail")});write("silly",a);render()}}
+function renderStandings(root){const local=read("standings");const all=standings.length?standings:local;const selected=all.filter(n=>!filter||n.series===filter||n.name===filter);const names=filter?[filter]:SERIES;const sections=names.map(name=>{const entry=selected.find(x=>(x.series||x.name)===name);const url=entry?.sourceUrl||entry?.source_url||entry?.url||OFFICIAL_STANDINGS[name];const updated=entry?.updatedAt||entry?.updated_at;const rows=entry?.rows||entry?.drivers||entry?.entries||[];const tables=Array.isArray(entry?.classes)?entry.classes.map(c=>({label:c.name||c.class||"Wertung",rows:c.rows||c.entries||[]})):[{label:entry?.category||"Gesamtwertung",rows}];const hasRows=tables.some(t=>Array.isArray(t.rows)&&t.rows.length);return `<article class="card standings-card"><span class=tag>${esc(name)} · ${esc(entry?.season||"Saison 2026")}</span><h3>${esc(entry?.title||"Meisterschaftsstand")}</h3>${updated?`<p class=muted>Aktualisiert: ${esc(new Date(updated).toLocaleString("de-DE"))}</p>`:""}${hasRows?tables.map(t=>`<h4>${esc(t.label)}</h4><div class=scroll><table class=table><thead><tr><th>Pos.</th><th>Fahrer / Team</th><th>Punkte</th></tr></thead><tbody>${t.rows.map((r,i)=>`<tr><td>${esc(r.position??r.pos??i+1)}</td><td>${esc(r.competitor||r.driver||r.team||r.name||"")}</td><td>${esc(r.points??r.score??"—")}</td></tr>`).join("")}</tbody></table></div>`).join(""):`<p class=muted>${esc(entry?.message||"Automatische Punktetabelle derzeit nicht verfügbar. Bitte offizielle Wertung öffnen.")}</p>`}<div class=actions>${url?`<a href="${esc(url)}" target=_blank rel=noopener>Offizielle Tabelle öffnen ↗</a>`:"<span class=muted>Keine Datenquelle hinterlegt</span>"}</div></article>`}).join("");root.innerHTML=`<div class=head><h2>Meisterschaftsstände</h2><span class=muted>Alle zehn Serien</span></div>${filters()}<p class=muted>Automatisch geladene Tabellen werden mit Quelle und Aktualisierungszeit angezeigt. Fehlt eine verifizierte Datenlieferung, findest du hier den offiziellen Tabellenlink statt erfundener Zahlen.</p><div class=grid>${sections}</div>`;bindFilter()}
+function render(){let root=$("#content"),items=[];if(!root)return;if(page==="home"){items=news.slice(0,18);root.innerHTML=`<div class=head><h2>Die neuesten Meldungen</h2><span class=muted>${news.length} Beiträge</span></div><div class=series>${SERIES.map(s=>`<button data-series="${esc(s)}">${esc(s)}<span>NEWS ANSEHEN ↗</span></button>`).join("")}</div><div class=head><h2>Aus dem Fahrerlager</h2></div><div class=grid>${items.map(card).join("")||'<div class=empty>Noch keine News geladen.</div>'}</div>`;$$( "[data-series]").forEach(b=>b.onclick=()=>{filter=b.dataset.series;page="news";setNav();render()})}else if(page==="news"){items=news.filter(n=>!filter||n.series===filter);root.innerHTML=`<div class=head><h2>News</h2><span class=muted>${items.length} Beiträge</span></div>${filters()}<div class=grid>${items.map(card).join("")||'<div class=empty>Keine passenden News.</div>'}</div>`;bindFilter()}else if(page==="saved"){items=read("saved");root.innerHTML=`<div class=head><h2>Gespeicherte News</h2><span class=muted>${items.length} Lesezeichen</span></div><div class=grid>${items.map(card).join("")||'<div class=empty>Tippe bei einer News auf „＋ Merken“.</div>'}</div>`}else if(page==="silly"){renderSilly(root)}else if(page==="standings"){renderStandings(root)}$$( ".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===page));bindSave();updateCount()}
 function setNav(){$$(".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===page))}
 $$(".nav").forEach(b=>b.onclick=()=>{page=b.dataset.page;filter="";setNav();render()});
-$("#refresh").onclick=refresh;window.addEventListener("focus",refresh);document.addEventListener("visibilitychange",()=>{if(!document.hidden)refresh()});
+$("#refresh").onclick=refresh;window.addEventListener("focus",()=>{if(document.visibilityState==="visible")refresh()});document.addEventListener("visibilitychange",()=>{if(!document.hidden)refresh()});
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();installPrompt=e;$("#install").classList.remove("hidden")});$("#install").onclick=async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}};
-if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
-news=read("cache");updateCount();render();refresh();
+if("serviceWorker"in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
+news=read("cache");standings=read("standings_cache");updateCount();render();refresh();
