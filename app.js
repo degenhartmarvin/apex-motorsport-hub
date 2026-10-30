@@ -9,9 +9,57 @@ function card(n){let yes=read("saved").some(x=>x.url===n.url);return `<article c
 function bindSave(){ $$("[data-save]").forEach(b=>b.onclick=()=>{let n=news.find(x=>x.url===b.dataset.save)||read("saved").find(x=>x.url===b.dataset.save);if(n)save(n);else if(b.dataset.localid){let k=page==="silly"?"silly":"standings",a=read(k).filter(x=>x.localid!==b.dataset.localid);write(k,a);render()}})}
 function filters(){return `<div class="filters"><select id="series"><option value="">Alle Rennserien</option>${SERIES.map(s=>`<option ${filter===s?"selected":""}>${esc(s)}</option>`).join("")}</select></div>`}
 function bindFilter(){let s=$("#series");if(s)s.onchange=()=>{filter=s.value;render()}}
-function rss(q){return "https://news.google.com/rss/search?q="+encodeURIComponent(q)+"&hl=de&gl=DE&ceid=DE:de"}
-async function fetchFeed(series,q){try{let res=await fetch("https://proxy.cors.dev/"+rss(q));if(!res.ok)throw Error("proxy");let xml=new DOMParser().parseFromString(await res.text(),"text/xml");if(xml.querySelector("parsererror"))throw Error("RSS");return [...xml.querySelectorAll("item")].slice(0,12).map(i=>({title:i.querySelector("title")?.textContent||"",url:i.querySelector("link")?.textContent||"",summary:(i.querySelector("description")?.textContent||"").replace(/<[^>]*>/g,"").slice(0,350),source:i.querySelector("source")?.textContent||"Google News",published:i.querySelector("pubDate")?.textContent||"",series})) .filter(x=>x.title&&x.url)}catch(e){return []}}
-async function refresh(){let status=$("#status");status.textContent="Suche aktuelle News …";let results=await Promise.all(Object.entries(QUERIES).map(([s,q])=>fetchFeed(s,q)));news=results.flat();let seen=new Set();news=news.filter(n=>!seen.has(n.url)&&seen.add(n.url));news.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));if(news.length){write("cache",news);status.textContent=`${news.length} Meldungen geladen · ${new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})} Uhr`}else{news=read("cache");status.textContent=news.length?"Feed gerade nicht erreichbar – gespeicherter News-Stand wird angezeigt.":"Keine News erreichbar. Prüfe Internetverbindung oder RSS-Proxy."}render()}
+function rss(q){
+  return "https://news.google.com/rss/search?q="+
+    encodeURIComponent(q+" when:7d")+
+    "&hl=de&gl=DE&ceid=DE:de";}
+async function fetchFeed(series,q){
+  try{
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(), 18000
+    );
+
+    const res = await fetch(
+      "https://proxy.cors.dev/" + rss(q),
+      {
+        method: "GET",
+        cache: "no-store",
+        credentials: "omit",
+        signal: controller.signal
+      }
+    );
+
+    clearTimeout(timer);
+
+    if(!res.ok) throw Error("HTTP " + res.status);
+
+    const xml = new DOMParser().parseFromString(
+      await res.text(), "text/xml"
+    );
+
+    if(xml.querySelector("parsererror"))
+      throw Error("RSS-Fehler");
+
+    return [...xml.querySelectorAll("item")]
+      .slice(0,12)
+      .map(i => ({
+        title: i.querySelector("title")?.textContent || "",
+        url: i.querySelector("link")?.textContent || "",
+        summary: (i.querySelector("description")?.textContent || "")
+          .replace(/<[^>]*>/g,"").slice(0,350),
+        source: i.querySelector("source")?.textContent || "Google News",
+        published: i.querySelector("pubDate")?.textContent || "",
+        series
+      }))
+      .filter(x => x.title && x.url);
+
+  } catch(e) {
+    console.error("APEX Newsfehler:",series,e);
+    return [];
+  }
+}
+async function refresh(){let status=$("#status");status.textContent="Suche Nachrichten der letzten 7 Tage …"; let results=await Promise.all(Oject.entries(QUERIES).map(([s,q])=>fetchFeed(s,q)));news=results.flat();let seen=new Set();news=news.filter(n=>!seen.has(n.url)&&seen.add(n.url));news.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));if(news.length){write("cache",news);status.textContent=`${news.length} Meldungen geladen · ${new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})} Uhr`}else{news=read("cache");status.textContent=news.length?"":Aktualisierung fehlgeschlagen – gespeicherter Stand wird angezeigt. Bitte später erneut versuchen."Keine News erreichbar. Prüfe Internetverbindung oder RSS-Proxy."}render()}
 function render(){let root=$("#content"),items=[];
 if(page==="home"){items=news.slice(0,18);root.innerHTML=`<div class=head><h2>Die neuesten Meldungen</h2><span class=muted>${news.length} Beiträge</span></div><div class=series>${SERIES.map(s=>`<button data-series="${esc(s)}">${esc(s)}<span>NEWS ANSEHEN ↗</span></button>`).join("")}</div><div class=head><h2>Aus dem Fahrerlager</h2></div><div class=grid>${items.map(card).join("")||'<div class=empty>Noch keine News geladen.</div>'}</div>`;$$("[data-series]").forEach(b=>b.onclick=()=>{filter=b.dataset.series;page="news";setNav();render()})}
 else if(page==="news"){items=news.filter(n=>!filter||n.series===filter);root.innerHTML=`<div class=head><h2>News</h2><span class=muted>${items.length} Beiträge</span></div>${filters()}<div class=grid>${items.map(card).join("")||'<div class=empty>Keine passenden News. Aktualisieren oder Filter ändern.</div>'}</div>`;bindFilter()}
