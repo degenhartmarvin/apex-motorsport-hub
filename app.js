@@ -9,93 +9,77 @@ function card(n){let yes=read("saved").some(x=>x.url===n.url);return `<article c
 function bindSave(){ $$("[data-save]").forEach(b=>b.onclick=()=>{let n=news.find(x=>x.url===b.dataset.save)||read("saved").find(x=>x.url===b.dataset.save);if(n)save(n);else if(b.dataset.localid){let k=page==="silly"?"silly":"standings",a=read(k).filter(x=>x.localid!==b.dataset.localid);write(k,a);render()}})}
 function filters(){return `<div class="filters"><select id="series"><option value="">Alle Rennserien</option>${SERIES.map(s=>`<option ${filter===s?"selected":""}>${esc(s)}</option>`).join("")}</select></div>`}
 function bindFilter(){let s=$("#series");if(s)s.onchange=()=>{filter=s.value;render()}}
-function rss(q){
-  return "https://news.google.com/rss/search?q="+
-    encodeURIComponent(q+" when:7d")+
-    "&hl=de&gl=DE&ceid=DE:de";}
-async function fetchFeed(series,q){
-  try{
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(), 18000
-    );
 
-    const res = await fetch(
-      "https://proxy.cors.dev/" + rss(q),
-      {
-        method: "GET",
-        cache: "no-store",
-        credentials: "omit",
-        signal: controller.signal
-      }
-    );
+const API_URL = "https://apex-motorsport-api.degenhartmarvin.workers.dev/api/news";
+
+async function refresh(){
+  const status = $("#status");
+  status.textContent = "Lade Nachrichten von APEX …";
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+
+    const response = await fetch(API_URL, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal
+    });
 
     clearTimeout(timer);
 
-    if(!res.ok) throw Error("HTTP " + res.status);
-
-    const xml = new DOMParser().parseFromString(
-      await res.text(), "text/xml"
-    );
-
-    if(xml.querySelector("parsererror"))
-      throw Error("RSS-Fehler");
-
-    return [...xml.querySelectorAll("item")]
-      .slice(0,12)
-      .map(i => ({
-        title: i.querySelector("title")?.textContent || "",
-        url: i.querySelector("link")?.textContent || "",
-        summary: (i.querySelector("description")?.textContent || "")
-          .replace(/<[^>]*>/g,"").slice(0,350),
-        source: i.querySelector("source")?.textContent || "Google News",
-        published: i.querySelector("pubDate")?.textContent || "",
-        series
-      }))
-      .filter(x => x.title && x.url);
-
-  } catch(e) {
-    console.error("APEX Newsfehler:",series,e);
-    return [];
-  }
-}
-async function refresh(){
-  let status = $("#status");
-  status.textContent = "Suche Nachrichten …";
-
-  try {
-    let results = await Promise.all(
-      Object.entries(QUERIES).map(([s,q]) => fetchFeed(s,q))
-    );
-
-    news = results.flat();
-
-    let seen = new Set();
-    news = news.filter(n =>
-      !seen.has(n.url) && seen.add(n.url)
-    );
-
-    news.sort((a,b) =>
-      new Date(b.published || 0) - new Date(a.published || 0)
-    );
-
-    if(news.length){
-      write("cache",news);
-      status.textContent = news.length + " Meldungen geladen.";
-    } else {
-      news = read("cache");
-      status.textContent = news.length
-        ? "Keine neuen Nachrichten. Gespeicherter Stand wird angezeigt."
-        : "Keine Nachrichten erreichbar. Bitte später erneut versuchen.";
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status);
     }
-  } catch(e) {
-    console.error("APEX Fehler:",e);
+
+    const data = await response.json();
+
+    if (!Array.isArray(data.news)) {
+      throw new Error("Ungültiges Nachrichtenformat");
+    }
+
+    news = data.news.map(item => ({
+      title: item.title || "",
+      url: item.url || "",
+      summary: item.summary || "",
+      source: item.source || "APEX",
+      published: item.published || "",
+      timestamp: item.timestamp || 0,
+      series: Array.isArray(item.series)
+        ? (item.series[0] || "Motorsport")
+        : (item.series || "Motorsport"),
+      sillySeason: item.sillySeason || false,
+      status: item.status || "Prüfung erforderlich"
+    })).filter(item => item.title && item.url);
+
+    const seen = new Set();
+    news = news.filter(item =>
+      !seen.has(item.url) && seen.add(item.url)
+    );
+
+    news.sort((a, b) =>
+      (b.timestamp || 0) - (a.timestamp || 0)
+    );
+
+    write("cache", news);
+
+    status.textContent =
+      news.length + " Nachrichten geladen · " +
+      (data.successfulSources || 0) + " Quellen aktiv";
+
+  } catch(error) {
+    console.error("APEX Ladefehler:", error);
+
     news = read("cache");
-    status.textContent = "Fehler beim Laden. Gespeicherter Stand wird angezeigt.";
+
+    status.textContent = news.length
+      ? "Verbindung fehlgeschlagen – gespeicherte Nachrichten werden angezeigt."
+      : "Nachrichten konnten nicht geladen werden.";
   }
 
   render();
 }
+
 function render(){let root=$("#content"),items=[];
 if(page==="home"){items=news.slice(0,18);root.innerHTML=`<div class=head><h2>Die neuesten Meldungen</h2><span class=muted>${news.length} Beiträge</span></div><div class=series>${SERIES.map(s=>`<button data-series="${esc(s)}">${esc(s)}<span>NEWS ANSEHEN ↗</span></button>`).join("")}</div><div class=head><h2>Aus dem Fahrerlager</h2></div><div class=grid>${items.map(card).join("")||'<div class=empty>Noch keine News geladen.</div>'}</div>`;$$("[data-series]").forEach(b=>b.onclick=()=>{filter=b.dataset.series;page="news";setNav();render()})}
 else if(page==="news"){items=news.filter(n=>!filter||n.series===filter);root.innerHTML=`<div class=head><h2>News</h2><span class=muted>${items.length} Beiträge</span></div>${filters()}<div class=grid>${items.map(card).join("")||'<div class=empty>Keine passenden News. Aktualisieren oder Filter ändern.</div>'}</div>`;bindFilter()}
